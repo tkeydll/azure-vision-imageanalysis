@@ -9,34 +9,38 @@ using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Azure.Storage.Files.Shares;
 using System.Linq;
+using Azure.Storage.Blobs;
 
 
 namespace ImageAnalyticsFunction
 {
     public class ImageAnalyticsFunction
     {
-        [FunctionName("IsHuman")]
+        [Singleton(Mode = SingletonMode.Function)]
+        [FunctionName("AnalyzeImage")]
         public static async Task Run(
-            [BlobTrigger("samples-workitems/{name}", Connection = "AzureWebJobsStorage")] Stream myBlob,
+            [BlobTrigger("images/source/{name}", Connection = "AzureWebJobsStorage")] Stream myBlob,
             string name,
-            //[Blob("correct-images/{name}", FileAccess.Write, Connection = "AzureWebJobsStorage")] Stream correctBlob,
-            //[Blob("invalid-images/{name}", FileAccess.Write, Connection = "AzureWebJobsStorage")] Stream invalidBlob,
+            [Blob("images/correct/{name}", FileAccess.Write, Connection = "AzureWebJobsStorage")] BlobClient correctBlob,
+            [Blob("images/invalid/{name}", FileAccess.Write, Connection = "AzureWebJobsStorage")] BlobClient invalidBlob,
             ILogger log)
         {
-            log.LogInformation($"C# Blob trigger function Processed blob\n Name:{name} \n Size: {myBlob.Length} Bytes");
+            log.LogInformation($"C# Blob trigger function Processed blob Name:{name} Size: {myBlob.Length} Bytes");
 
-            bool result = await AnalyzeImageAsync(myBlob);
+            await Task.Delay(5000);
+
+            bool result = false;
+
+            //bool result = await AnalyzeImageAsync(myBlob);
             Console.WriteLine($"result: {result}");
 
             if (result)
             {
-                //await myBlob.CopyToAsync(correctBlob);
-                await SaveToAzureFilesAsync(myBlob, "correct", name);
+                await correctBlob.UploadAsync(myBlob);
             }
             else
             {
-                //await myBlob.CopyToAsync(invalidBlob);
-                await SaveToAzureFilesAsync(myBlob, "invalid", name);
+                await invalidBlob.UploadAsync(myBlob);
             }
         }
 
@@ -65,7 +69,7 @@ namespace ImageAnalyticsFunction
         }
 
 
-        private static readonly string[] targetTags = { "person", "human face"};
+        private static readonly string[] targetTags = Environment.GetEnvironmentVariable("TARGET_TAGS").Split(',');
 
         static bool ContainsHumanTags(ImageAnalysisResult result)
         {
