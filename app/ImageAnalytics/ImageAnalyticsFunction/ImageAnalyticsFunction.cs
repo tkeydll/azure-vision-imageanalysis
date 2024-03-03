@@ -16,6 +16,14 @@ namespace ImageAnalyticsFunction
 {
     public class ImageAnalyticsFunction
     {
+        private static int interval = Environment.GetEnvironmentVariable("INTERVAL") != null ? int.Parse(Environment.GetEnvironmentVariable("INTERVAL")) : 5000;
+        private static string endpoint = Environment.GetEnvironmentVariable("VISION_ENDPOINT");
+        private static string key = Environment.GetEnvironmentVariable("VISION_KEY");
+        private static readonly string[] targetTags = Environment.GetEnvironmentVariable("TARGET_TAGS").Split(',');
+
+        private static ILogger _log;
+
+
         [Singleton(Mode = SingletonMode.Function)]
         [FunctionName("AnalyzeImage")]
         public static async Task Run(
@@ -23,32 +31,46 @@ namespace ImageAnalyticsFunction
             string name,
             [Blob("images/correct/{name}", FileAccess.Write, Connection = "AzureWebJobsStorage")] BlobClient correctBlob,
             [Blob("images/invalid/{name}", FileAccess.Write, Connection = "AzureWebJobsStorage")] BlobClient invalidBlob,
+            [Blob("images/error/{name}", FileAccess.Write, Connection = "AzureWebJobsStorage")] BlobClient errorBlob,
             ILogger log)
         {
             log.LogInformation($"C# Blob trigger function Processed blob Name:{name} Size: {myBlob.Length} Bytes");
 
-            await Task.Delay(5000);
+            _log = log;
 
-            bool result = false;
+            await Task.Delay(interval);
 
-            //bool result = await AnalyzeImageAsync(myBlob);
-            Console.WriteLine($"result: {result}");
-
-            if (result)
+            try
             {
-                await correctBlob.UploadAsync(myBlob);
+                bool result = await AnalyzeImageAsync(myBlob);
+                //bool result = true;
+
+                log.LogInformation($"result: {result}");
+
+                myBlob.Position = 0;
+
+                if (result)
+                {
+                    var uploadResult = await correctBlob.UploadAsync(myBlob, true);
+                    log.LogInformation($"({uploadResult.GetRawResponse().Status}) Save to correct dir.");
+                }
+                else
+                {
+                    var uploadResult = await invalidBlob.UploadAsync(myBlob, true);
+                    log.LogInformation($"({uploadResult.GetRawResponse().Status}) Save to invalid dir.");
+                }
             }
-            else
+            catch (Exception ex)
             {
-                await invalidBlob.UploadAsync(myBlob);
+                log.LogError(ex.Message);
+                var uploadResult = await errorBlob.UploadAsync(myBlob);
+                log.LogInformation($"({uploadResult.GetRawResponse().Status}) Save to error dir.");
             }
         }
 
+
         static async Task<bool> AnalyzeImageAsync(Stream imageStream)
         {
-            string endpoint = Environment.GetEnvironmentVariable("VISION_ENDPOINT");
-            string key = Environment.GetEnvironmentVariable("VISION_KEY");
-
             ImageAnalysisClient client = new ImageAnalysisClient(
                 new Uri(endpoint),
                 new AzureKeyCredential(key));
@@ -60,7 +82,7 @@ namespace ImageAnalyticsFunction
                 VisualFeatures.Tags | VisualFeatures.Read,
                 new ImageAnalysisOptions { GenderNeutralCaption = false });
 
-            Console.WriteLine($"result: {JsonConvert.SerializeObject(result.Tags)}");
+            _log.LogDebug($"result: {JsonConvert.SerializeObject(result.Tags)}");
 
             // ”»’è
             bool judge = ContainsHumanTags(result);
@@ -68,8 +90,6 @@ namespace ImageAnalyticsFunction
             return judge;
         }
 
-
-        private static readonly string[] targetTags = Environment.GetEnvironmentVariable("TARGET_TAGS").Split(',');
 
         static bool ContainsHumanTags(ImageAnalysisResult result)
         {
